@@ -5,6 +5,7 @@ from tkinter import messagebox
 
 def resize_for_display(img, max_width, max_height):
     h, w = img.shape[:2]
+    scale = 1.0
     if w > max_width or h > max_height:
         scale = min(max_width / w, max_height / h)
         new_size = (int(w * scale), int(h * scale))

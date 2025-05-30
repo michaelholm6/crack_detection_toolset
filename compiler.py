@@ -5,7 +5,6 @@ import subprocess
 
 def generate_exe():
     command = (
-    "conda activate Python3.11 && "
     ".\.venv\Scripts\pyinstaller.exe main.py "
     "--name crack_detection_toolset "
     "--icon molecule.ico "
