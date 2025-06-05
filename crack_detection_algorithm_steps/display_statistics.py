@@ -31,6 +31,7 @@ def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, a
     
     print("-" * 20)
     print(f"\nSkeleton Length: {real_skeleton_length:.5f} um")
+    print(f"Total Area of Interest: {area_of_interest_area * (um_per_pixel ** 2):.5f} um^2")
     print(f"Defect Area: {defect_area_um2:.5f} um^2")
     print(f"Defect Area Fraction: {defect_area_fraction:.5f}")
     print(f"Crack Area: {crack_area_um2:.5f} um^2")
