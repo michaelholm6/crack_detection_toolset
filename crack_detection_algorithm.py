@@ -7,15 +7,15 @@ from crack_detection_algorithm_steps.get_phyiscal_scale import *
 from crack_detection_algorithm_steps.compute_crack_skeleton import *
 from crack_detection_algorithm_steps.display_statistics import *
 from crack_detection_algorithm_steps.save_and_display_results import *
-from crack_detection_algorithm_steps.delete_contour_points import *
+from crack_detection_algorithm_steps.edit_contour_points import *
 
 
     
 
 def main(args):
-    image, gray, blurred = load_and_preprocess_image(args.image_path)
+    image, gray, blurred = load_and_preprocess_image(args.image_path, blur_kernel_size=tuple(args.blur_kernel_size), display_post_processed_image=args.show_post_processed_image, clip_limit=args.clip_limit, tile_grid_size=tuple(args.tile_grid_size))
     area_of_interest = get_polygon_from_user(image, args.supress_instructions)
-    cracks = detect_cracks(blurred, args.crack_expansion, confidence_threshold=args.confidence_threshold)
+    cracks = detect_cracks(blurred, int(args.crack_expansion), confidence_threshold=args.confidence_threshold)
     cracks = clip_contours_with_polygon(gray.shape, cracks, area_of_interest)
     cracks = run_contour_editor_qt(image, cracks, args.supress_instructions)
     crack_circularity = measure_contour_circularity(cracks)
