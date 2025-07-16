@@ -1,5 +1,7 @@
 import numpy as np
 import cv2
+import tkinter as tk
+from tkinter import messagebox
 
 def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, area_of_interest, circularity_threshold):
 
@@ -29,16 +31,23 @@ def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, a
     
     skeleton_length_fraction = skeleton_length / area_of_interest_area
     
-    print("-" * 20)
-    print(f"\nSkeleton Length: {real_skeleton_length:.5f} um")
-    print(f"Total Area of Interest: {area_of_interest_area * (um_per_pixel ** 2):.5f} um^2")
-    print(f"Defect Area: {defect_area_um2:.5f} um^2")
-    print(f"Defect Area Fraction: {defect_area_fraction:.5f}")
-    print(f"Crack Area: {crack_area_um2:.5f} um^2")
-    print(f"Crack Area Fraction: {crack_area_fraction:.5f}")
-    print(f"Pore Area: {pore_area_um2:.5f} um^2")
-    print(f"Pore Area Fraction: {pore_area_fraction:.5f}")
-    print(f"Skeleton Lenth: {real_skeleton_length:.5f} um")
-    print(f"Skeleton Length Fraction: {skeleton_length_fraction:.5f}/um\n")
-    print("-" * 20)
+    text = (
+        "-" * 20 + "\n\n"
+        f"Skeleton Length: {real_skeleton_length:.5f} um\n"
+        f"Total Area of Interest: {area_of_interest_area * (um_per_pixel ** 2):.5f} um^2\n"
+        f"Defect Area: {defect_area_um2:.5f} um^2\n"
+        f"Defect Area Fraction: {defect_area_fraction:.5f}\n"
+        f"Crack Area: {crack_area_um2:.5f} um^2\n"
+        f"Crack Area Fraction: {crack_area_fraction:.5f}\n"
+        f"Pore Area: {pore_area_um2:.5f} um^2\n"
+        f"Pore Area Fraction: {pore_area_fraction:.5f}\n"
+        f"Skeleton Length: {real_skeleton_length:.5f} um\n"
+        f"Skeleton Length Fraction: {skeleton_length_fraction:.5f}/um\n\n"
+        + "-" * 20
+    )
+    
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    messagebox.showinfo("Analysis Summary", text)
+    root.destroy()
     

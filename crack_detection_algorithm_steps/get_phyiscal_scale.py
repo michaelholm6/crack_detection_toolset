@@ -140,4 +140,7 @@ def get_scale_from_user(image, show_instructions=True):
     if close_app_after:
         app.quit()
 
+    if scale is None:
+        raise ValueError("Scale bar was not defined.")
+
     return scale

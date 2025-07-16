@@ -18,7 +18,7 @@ def get_polygon_from_user(image, supress_instructions=False):
         "- Left click to add points and outline your polygon.\n"
         "- Press 'C' to close the polygon and exit the window.\n"
         "- Press 'R' to reset points.\n"
-        "- Press 'Esc' to cancel and close the application."
+        "- Press 'Esc' to cancel and close the application.\n"
         "- When finished, close the window.\n"
     )
 
@@ -145,5 +145,5 @@ def get_polygon_from_user(image, supress_instructions=False):
             y = int((pt.y() - drawer.offset_y) / drawer.scale_y)
             scaled_points.append([x, y])
         return scaled_points
-
-    return None
+    else:
+        raise ValueError("At least 3 points are required to form a region of interest.")
