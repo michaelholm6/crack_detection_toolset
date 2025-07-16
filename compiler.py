@@ -1,9 +1,6 @@
 import subprocess
 import PyInstaller.__main__
 
-#Run this in a miniconda Python 3.11 environment
-#For this script, I call it "Python3.11"
-
 def generate_exe():
 
     PyInstaller.__main__.run([

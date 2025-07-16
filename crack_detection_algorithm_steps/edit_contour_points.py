@@ -3,11 +3,134 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 import cv2
 import utils
+from crack_detection_algorithm_steps.measure_contour_circularity import *
+from crack_detection_algorithm_steps.detect_cracks import *
+import tkinter as tk
+from PyQt5.QtWidgets import QHBoxLayout, QLabel
+from PyQt5.QtGui import QPixmap, QIcon
 
-class ContourEditor(QtWidgets.QGraphicsView):
+def show_instructions_window_contour_editor():
+    root = tk.Tk()
+    root.title("Instructions")
+
+    instructions = (
+        "Instructions for Editing Contours:\n\n"
+        "- You will now manually edit or create contours on the image.\n"
+        "- Left click to select points by circling them with a lasso.\n"
+        "- Press 'C' to create a new contour by clicking to add points. Close it by pressing 'C' again.\n"
+        "- Press 'D' to delete selected points.\n"
+        "- Press 'U' to undo the last action.\n"
+        "- Press 'S' to scale selected points (drag mouse relative to center).\n"
+        "- Press 'M' to move selected points (drag mouse).\n"
+        "- Press 'R' to rotate selected points (drag mouse relative to center).\n"
+        "- Use the mouse wheel to zoom in and out.\n"
+        "- Press 'Esc' to cancel and close the application.\n"
+        "- Press the same key again or left click to exit a mode.\n\n"
+        "When you're done, simply close the window to continue."
+    )
+
+    label = tk.Label(root, text=instructions, justify="left", padx=20, pady=20, font=("Helvetica", 12))
+    label.pack()
+
+    root.update_idletasks()
+    window_width = root.winfo_width()
+    window_height = root.winfo_height()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = (screen_width // 2) - (window_width // 2)
+    y = (screen_height // 2) - (window_height // 2)
+    root.geometry(f"+{x}+{y}")
+
+    ok_button = tk.Button(root, text="OK", command=root.destroy, padx=10, pady=5)
+    ok_button.pack(pady=(0, 20))
+
+    root.mainloop()
+
+class ContourEditor(QtWidgets.QWidget):
+    def __init__(self, image, contours, parent=None):
+        super().__init__(parent)
+
+        self.image = image
+        self.original_contours = contours
+        self.contours = [c.copy() for c in contours]
+        self.circularity = 0.5  # Default circularity value
+
+        # Create a QGraphicsView (your existing viewer)
+        self.view = ContourEditorView(image, contours, self.circularity)
+        
+        # Create slider
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(100)  # We'll map this to [0.0, 1.0]
+        self.slider.setValue(50)
+        self.slider.setTickInterval(10)
+        self.slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.slider.valueChanged.connect(self.update_circularity)
+        
+                # Make it taller
+        self.slider.setFixedHeight(40)
+
+        # Optional: also style it
+        self.slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 10px;
+            }
+            QSlider::handle:horizontal {
+                height: 20px;
+                width: 20px;
+                margin: -5px 0;
+            }
+        """)
+
+        # Optional: label to show value
+        self.label = QtWidgets.QLabel(f"Circularity: {self.circularity:.2f}")
+        
+        font = self.label.font()
+        font.setPointSize(16)  # <-- increase as desired, e.g., 16 or 18
+        self.label.setFont(font)
+
+        question_icon_label = QLabel()
+        # Use the standard question icon from the style, or load your own pixmap if you have one:
+        style = self.style()
+        question_icon = style.standardIcon(QtWidgets.QStyle.SP_MessageBoxQuestion)
+        pixmap = question_icon.pixmap(16, 16)
+        question_icon_label.setPixmap(pixmap)
+
+        # Set tooltip text for the icon
+        question_icon_label.setToolTip(
+            "Adjust the circularity threshold.\n"
+            "Contours with circularity above this value will be marked as pores.\n"
+            "Pores are shown in red, while cracks are shown in blue.\n"
+            "Use the slider to change the threshold between 0 and 1."
+        )
+
+        # Put label and icon side by side in a horizontal layout
+        label_layout = QHBoxLayout()
+        label_layout.addWidget(self.label)
+        label_layout.addWidget(question_icon_label)
+        label_layout.addStretch()  # push to left
+
+        # Replace previous adding of self.label with adding this layout:
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.view)
+        layout.addLayout(label_layout)  # add label + icon layout
+        layout.addWidget(self.slider)
+        self.setLayout(layout)
+
+    def update_circularity(self, value):
+        new_circularity = value / 100.0
+        self.circularity = new_circularity
+        self.view.circularity = new_circularity
+        self.view.update_display()
+        self.label.setText(f"Circularity: {new_circularity:.2f}")
+
+    def get_results(self):
+        return self.view.get_edited_contours(), self.circularity
+
+class ContourEditorView(QtWidgets.QGraphicsView):
     #TODO: Add option to translate selected contours by dragging mouse
     #TODO: Add option to rotate selected contours by dragging mouse
-    def __init__(self, image, contours, parent=None):
+    def __init__(self, image, contours, circularity, parent=None):
         super().__init__(parent)
         self.image = image
         self.original_contours = contours
@@ -30,6 +153,7 @@ class ContourEditor(QtWidgets.QGraphicsView):
         self.new_contour_points = [] 
         self.currently_creating_contour = False
         self.current_mode = "Selection"
+        self.circularity = circularity
 
         # Scene setup
         self.scene = QtWidgets.QGraphicsScene(self)
@@ -65,7 +189,13 @@ class ContourEditor(QtWidgets.QGraphicsView):
         for c_idx, cnt in enumerate(self.contours):
             if self.currently_creating_contour and c_idx == len(self.contours) - 1:
                 points = [tuple(pt[0]) for pt in cnt]
-                cv2.polylines(img, [np.array(points)], isClosed=False, color=(0, 0, 255), thickness=2)
+                
+                if measure_contour_circularity([cnt])[0] > self.circularity:
+                    color = (0, 0, 255)  
+                else:
+                    color = (255, 0, 0)
+                
+                cv2.polylines(img, [np.array(points)], isClosed=False, color=color, thickness=2)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
                         cv2.circle(img, point, 2, (255, 0, 0), -1)  # Blue highlight
@@ -74,7 +204,11 @@ class ContourEditor(QtWidgets.QGraphicsView):
             
             else:            
                 points = [tuple(pt[0]) for pt in cnt]
-                cv2.polylines(img, [np.array(points)], isClosed=True, color=(0, 0, 255), thickness=2)
+                if measure_contour_circularity([cnt])[0] > self.circularity:
+                    color = (0, 0, 255)  
+                else:
+                    color = (255, 0, 0)
+                cv2.polylines(img, [np.array(points)], isClosed=True, color=color, thickness=2)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
                         cv2.circle(img, point, 2, (255, 0, 0), -1)  # Blue highlight
@@ -112,16 +246,6 @@ class ContourEditor(QtWidgets.QGraphicsView):
 
             # Mark the initial fit as done to prevent resetting on each update
             self.initial_fit_done = True
-            
-        # if self.creating_contour and len(self.new_contour_points) > 0:
-        #     for pt in self.new_contour_points:
-        #         cv2.circle(img, pt, 3, (0, 255, 0), -1)  # Red points
-
-        #     for i in range(1, len(self.new_contour_points)):
-        #         if i > 0:
-        #             pt1 = self.new_contour_points[i - 1]
-        #             pt2 = self.new_contour_points[i]
-        #             cv2.line(img, pt1, pt2, (0, 0, 255), 2)  # Green lines
         
     def paintEvent(self, event):
         super().paintEvent(event)  # Draw scene normally
@@ -135,7 +259,7 @@ class ContourEditor(QtWidgets.QGraphicsView):
             font.setBold(True)
             painter.setFont(font)
 
-            painter.drawText(10, 30, f"Mode: {self.current_mode}")
+            painter.drawText(50, 50, f"Mode: {self.current_mode}")
 
             painter.end()
             
@@ -154,6 +278,9 @@ class ContourEditor(QtWidgets.QGraphicsView):
             if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active:
                 self.delete_selected_points()
                 self.update_display()
+                
+        elif event.key() == QtCore.Qt.Key_Escape:
+            sys.exit(0)  # quit python script entirely
 
         elif event.key() == QtCore.Qt.Key_S:
             if not self.creating_contour and not self.moving_active and not self.rotating_active:
@@ -257,7 +384,7 @@ class ContourEditor(QtWidgets.QGraphicsView):
                 self.current_mode = "Selection"
                 self.viewport().update()
                 self.currently_creating_contour = False
-                if len(self.new_contour_points) <= 3:
+                if len(self.new_contour_points) < 3:
                     self.contours.pop()  
                 self.new_contour_points.clear()
                 self.creating_contour = False
@@ -492,41 +619,26 @@ class ContourEditor(QtWidgets.QGraphicsView):
             self.contour_scale_factors[c_idx] = new_scale
         
 
+def run_contour_editor(image, contours, supress_instructions):
+    if not supress_instructions:
+        show_instructions_window_contour_editor()
 
-def run_contour_editor_qt(image, contours, show_instructions):
-    """
-    Launches the PyQt contour editor window.
-
-    Args:
-        image (np.ndarray): BGR image.
-        contours (list of np.ndarray): List of contours.
-
-    Returns:
-        list of np.ndarray: Edited contours.
-    """
-    
-    if show_instructions:
-        utils.show_instructions(message="""This screen let's you manually edit contours. To select points, circle them with your cursor.\n 
-                \n -Press 'C' to create a new contour by clicking to create points. The contour will be auto-completed after leaving this mode.
-                \n -Press 'D' to delete selected points.
-                \n -Press 'U' to undo the last action.
-                \n -Press 'S' to scale selected points.
-                \n -Press 'M' to move selected points.
-                \n -Press 'R' to rotate selected points.
-                \n -Use the mouse wheel to zoom in and out.
-                \n \n To exit a mode, press the corresponding key again or left click.""")
-        
-    
     app = QtWidgets.QApplication(sys.argv)
-    editor = ContourEditor(image, contours)
-    editor.setWindowTitle("Contour Editor (PyQt)")
-    editor.showMaximized()
+    editor_widget = ContourEditor(image, contours)
+    editor_widget.setWindowTitle("Contour Editor (PyQt)")
+
+    # Make window stay on top
+    editor_widget.setWindowFlags(editor_widget.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+
+    editor_widget.showMaximized()
 
     result = {}
 
     def on_exit():
-        result['contours'] = editor.get_edited_contours()
+        final_contours, final_circularity = editor_widget.get_results()
+        result['contours'] = final_contours
+        result['circularity'] = final_circularity
 
     app.aboutToQuit.connect(on_exit)
     app.exec_()
-    return result['contours']
+    return result['contours'], result['circularity']

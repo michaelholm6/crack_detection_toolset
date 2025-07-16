@@ -8,20 +8,22 @@ from crack_detection_algorithm_steps.compute_crack_skeleton import *
 from crack_detection_algorithm_steps.display_statistics import *
 from crack_detection_algorithm_steps.save_and_display_results import *
 from crack_detection_algorithm_steps.edit_contour_points import *
+from crack_detection_algorithm_steps.input_dialogue import *
 
 
     
 
-def main(args):
-    image, gray, blurred = load_and_preprocess_image(args.image_path, blur_kernel_size=tuple(args.blur_kernel_size), display_post_processed_image=args.show_post_processed_image, clip_limit=args.clip_limit, tile_grid_size=tuple(args.tile_grid_size))
-    area_of_interest = get_polygon_from_user(image, args.supress_instructions)
-    cracks = detect_cracks(blurred, int(args.crack_expansion), confidence_threshold=args.confidence_threshold)
+def main():
+    args = get_user_inputs()
+    image, gray, blurred = run_preprocess_gui(args["image_path"], args["suppress_instructions"])
+    area_of_interest = get_polygon_from_user(image, args["suppress_instructions"])
+    cracks = detect_cracks(image, blurred, area_of_interest, args['suppress_instructions'])
     cracks = clip_contours_with_polygon(gray.shape, cracks, area_of_interest)
-    cracks = run_contour_editor_qt(image, cracks, args.supress_instructions)
+    cracks, circularity = run_contour_editor(image, cracks, args["suppress_instructions"])
     crack_circularity = measure_contour_circularity(cracks)
     crack_and_crack_circularity = [(cnt, circ) for cnt, circ in zip(cracks, crack_circularity)]
-    um_per_pixel = get_scale_from_user(image, args.supress_instructions)
-    skeleton = compute_skeleton(crack_and_crack_circularity, gray.shape)
-    display_statistics(crack_and_crack_circularity, um_per_pixel, skeleton, area_of_interest, args.circularity)
-    save_and_display_results(image, crack_and_crack_circularity, skeleton, args.output_path)
-    print(f"Results saved to {args.output_path}")
+    um_per_pixel = get_scale_from_user(image, args["suppress_instructions"])
+    skeleton = compute_skeleton(crack_and_crack_circularity, gray.shape, circularity)
+    display_statistics(crack_and_crack_circularity, um_per_pixel, skeleton, area_of_interest, circularity)
+    save_and_display_results(image, crack_and_crack_circularity, skeleton, args["output_path"])
+    print(f"Results saved to {args["output_path"]}")
