@@ -47,7 +47,7 @@ def show_instructions_window_contour_editor():
     root.mainloop()
 
 class ContourEditor(QtWidgets.QWidget):
-    def __init__(self, image, contours, parent=None):
+    def __init__(self, image, contours, line_thickness, parent=None):
         super().__init__(parent)
 
         self.image = image
@@ -56,7 +56,7 @@ class ContourEditor(QtWidgets.QWidget):
         self.circularity = 0.5  # Default circularity value
 
         # Create a QGraphicsView (your existing viewer)
-        self.view = ContourEditorView(image, contours, self.circularity)
+        self.view = ContourEditorView(image, contours, line_thickness, self.circularity)
         
         # Create slider
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -130,7 +130,7 @@ class ContourEditor(QtWidgets.QWidget):
 class ContourEditorView(QtWidgets.QGraphicsView):
     #TODO: Add option to translate selected contours by dragging mouse
     #TODO: Add option to rotate selected contours by dragging mouse
-    def __init__(self, image, contours, circularity, parent=None):
+    def __init__(self, image, contours, line_thickness, circularity, parent=None):
         super().__init__(parent)
         self.image = image
         self.original_contours = contours
@@ -154,6 +154,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
         self.currently_creating_contour = False
         self.current_mode = "Selection"
         self.circularity = circularity
+        self.line_thickness = line_thickness
 
         # Scene setup
         self.scene = QtWidgets.QGraphicsScene(self)
@@ -195,12 +196,12 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                 else:
                     color = (255, 0, 0)
                 
-                cv2.polylines(img, [np.array(points)], isClosed=False, color=color, thickness=2)
+                cv2.polylines(img, [np.array(points)], isClosed=False, color=color, thickness=self.line_thickness)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
-                        cv2.circle(img, point, 2, (255, 0, 0), -1)  # Blue highlight
+                        cv2.circle(img, point, self.line_thickness, (255, 0, 0), -1)  # Blue highlight
                     else:
-                        cv2.circle(img, point, 1, (0, 255, 0), -1)  # Green default
+                        cv2.circle(img, point, int(self.line_thickness/2), (0, 255, 0), -1)  # Green default
             
             else:            
                 points = [tuple(pt[0]) for pt in cnt]
@@ -208,18 +209,18 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                     color = (0, 0, 255)  
                 else:
                     color = (255, 0, 0)
-                cv2.polylines(img, [np.array(points)], isClosed=True, color=color, thickness=2)
+                cv2.polylines(img, [np.array(points)], isClosed=True, color=color, thickness=self.line_thickness)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
-                        cv2.circle(img, point, 2, (255, 0, 0), -1)  # Blue highlight
+                        cv2.circle(img, point, self.line_thickness, (255, 0, 0), -1)  # Blue highlight
                     else:
-                        cv2.circle(img, point, 1, (0, 255, 0), -1)  # Green default
+                        cv2.circle(img, point, int(self.line_thickness/2), (0, 255, 0), -1)  # Green default
                     
         if (self.scaling_active or self.rotating_active) and self.mouse_pos:
             img_center = QtCore.QPointF(self.image.shape[1] / 2, self.image.shape[0] / 2)
             x1, y1 = int(self.mouse_pos.x()), int(self.mouse_pos.y())
             x2, y2 = int(img_center.x()), int(img_center.y())
-            cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), self.line_thickness)
 
         # Convert the image to QImage for PyQt rendering
         height, width, _ = img.shape
@@ -474,7 +475,9 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             if hasattr(self, 'lasso_item') and self.lasso_item:
                 self.scene.removeItem(self.lasso_item)
             polygon = QtGui.QPolygonF(self.lasso_points)
-            self.lasso_item = self.scene.addPolygon(polygon, QtGui.QPen(QtGui.QColor("red")))
+            pen = QtGui.QPen(QtGui.QColor("red"))
+            pen.setWidth(self.line_thickness)  # use the slider value
+            self.lasso_item = self.scene.addPolygon(polygon, pen)
         elif self.pan_active:
             delta = event.pos() - self.last_mouse_pos
             self.last_mouse_pos = event.pos()
@@ -619,12 +622,12 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             self.contour_scale_factors[c_idx] = new_scale
         
 
-def run_contour_editor(image, contours, supress_instructions):
+def run_contour_editor(image, contours, line_thickness, supress_instructions):
     if not supress_instructions:
         show_instructions_window_contour_editor()
 
     app = QtWidgets.QApplication(sys.argv)
-    editor_widget = ContourEditor(image, contours)
+    editor_widget = ContourEditor(image, contours, line_thickness)
     editor_widget.setWindowTitle("Contour Editor (PyQt)")
 
     # Make window stay on top

@@ -12,12 +12,13 @@ class ClickableLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 class ScaleBarPicker(QtWidgets.QWidget):
-    def __init__(self, image, supress_instructions=False):
+    def __init__(self, image, line_thickness, supress_instructions=False):
         super().__init__()
         
         self.setWindowTitle("Draw Scale Bar")
         self.image_orig = image.copy()
         self.supress_instructions = supress_instructions
+        self.line_thickness = line_thickness
 
         self.scale_bar_pts = []
 
@@ -73,7 +74,7 @@ class ScaleBarPicker(QtWidgets.QWidget):
         painter.setPen(pen)
 
         for pt in self.scale_bar_pts:
-            painter.drawEllipse(pt, 7, 7)
+            painter.drawEllipse(pt, self.line_thickness, self.line_thickness)
         if len(self.scale_bar_pts) == 2:
             painter.drawLine(self.scale_bar_pts[0], self.scale_bar_pts[1])
         painter.end()
@@ -124,14 +125,14 @@ class ScaleBarPicker(QtWidgets.QWidget):
             self.scale_bar_pts = []
             self.update_display()
 
-def get_scale_from_user(image, show_instructions=True):
+def get_scale_from_user(image, line_thickness, show_instructions=True):
     app = QtWidgets.QApplication.instance()
     close_app_after = False
     if app is None:
         app = QtWidgets.QApplication(sys.argv)
         close_app_after = True
 
-    picker = ScaleBarPicker(image, show_instructions)
+    picker = ScaleBarPicker(image, line_thickness, show_instructions)
     picker.show()
     app.exec_()
 

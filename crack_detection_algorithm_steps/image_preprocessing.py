@@ -8,14 +8,7 @@ from tkinter import messagebox
 class PreprocessGUI(QtWidgets.QWidget):
     def __init__(self, image_path):
         super().__init__()
-        
-        self.setWindowTitle("Image Preprocessing GUI")
-
-        screen = QtWidgets.QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        self.setMinimumSize(screen_geometry.width(), screen_geometry.height())
-
-        self.showMaximized()  # <<<<< Use this instead of showFullScreen
+        self.setWindowTitle("Image Preprocessing GUI")  # This is enough for full screen without warnings
 
         self.image = cv2.imread(image_path)
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
@@ -27,6 +20,12 @@ class PreprocessGUI(QtWidgets.QWidget):
 
         self.init_ui()
         self.update_image()
+        
+        self.showMaximized()
+        
+    def resizeEvent(self, event):
+        self.update_image()
+        super().resizeEvent(event)
         
     def keyPressEvent(self, event: QtGui.QKeyEvent):
             if event.key() == QtCore.Qt.Key_Escape:
