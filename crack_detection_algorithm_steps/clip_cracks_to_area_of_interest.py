@@ -2,6 +2,11 @@ import numpy as np
 import cv2
 
 def clip_contours_with_polygon(image_shape, contours, polygon_points):
+    """Clip contours to the interior of a polygon mask.
+
+    Renders contours and the polygon as binary masks, ANDs them, then
+    re-extracts contours so that only portions inside the polygon are kept.
+    """
     mask = np.zeros(image_shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [np.array(polygon_points, dtype=np.int32)], 255)
     contour_mask = np.zeros_like(mask)

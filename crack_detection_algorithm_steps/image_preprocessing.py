@@ -271,32 +271,14 @@ class PreprocessGUI(QtWidgets.QWidget):
         if self.blur_kernel_size > 0:
             post_processed = cv2.GaussianBlur(post_processed, (self.blur_kernel_size, self.blur_kernel_size), 0)
 
+        self.post_processed = post_processed
+
         original_bgr = self.image.copy()
         post_bgr = cv2.cvtColor(post_processed, cv2.COLOR_GRAY2BGR)
 
         self.display_image(self.original_label, original_bgr)
         self.display_image(self.processed_label, post_bgr)
         
-    def create_label_with_tooltip(self, text, tooltip_text, font):
-        layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(text)
-        label.setFont(font)
-
-        # Question mark icon as a QLabel with blue text and underline for clarity
-        question_mark = QtWidgets.QLabel("?")
-        question_mark.setFont(font)
-        question_mark.setStyleSheet("color: blue; text-decoration: underline;")
-        question_mark.setToolTip(tooltip_text)
-        question_mark.setFixedWidth(15)
-        question_mark.setAlignment(QtCore.Qt.AlignCenter)
-
-        layout.addWidget(label)
-        layout.addWidget(question_mark)
-        layout.addStretch(1)
-        container = QtWidgets.QWidget()
-        container.setLayout(layout)
-        return container
-
     def display_image(self, label, img_bgr):
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         h, w, ch = img_rgb.shape
@@ -313,6 +295,11 @@ class PreprocessGUI(QtWidgets.QWidget):
         label.setPixmap(scaled_pixmap)
 
 def run_preprocess_gui(image_path, suppress_instructions=False):
+    """Show an interactive GUI for CLAHE and Gaussian blur preprocessing.
+
+    Returns the original BGR image, the grayscale image, and the preprocessed
+    (blurred/contrast-enhanced) grayscale image as a tuple.
+    """
     # Show instructions popup if not suppressed
     if not suppress_instructions:
         root = tk.Tk()

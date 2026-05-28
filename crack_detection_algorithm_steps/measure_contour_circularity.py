@@ -2,6 +2,11 @@ import cv2
 import numpy as np
 
 def measure_contour_circularity(contour_list):
+    """Return circularity (4πA/P²) for each contour in contour_list.
+
+    Values range from 0 (elongated) to 1 (perfect circle). Contours with
+    zero perimeter are assigned circularity 0.
+    """
     circularity_list = []
     for cnt in contour_list:
         area = cv2.contourArea(cnt)

@@ -4,9 +4,15 @@ from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QKeyEvent
 from PyQt5.QtCore import Qt, QPoint, QTimer
 
-def get_polygon_from_user(image, supress_instructions=False):
+def get_polygon_from_user(image, suppress_instructions=False):
+    """Show an interactive window for the user to draw a polygon ROI.
+
+    Left-click to add points, press C to close the polygon, R to reset.
+    Returns a list of [x, y] integer coordinate pairs in original image space.
+    Raises ValueError if fewer than 3 points are selected.
+    """
     # === Tkinter instructions window ===
-    if not supress_instructions:
+    if not suppress_instructions:
         root = tk.Tk()
         root.title("Instructions")
 

@@ -1,11 +1,16 @@
 import cv2
 import numpy as np
 
-def save_and_display_results(image, contours, skeleton, line_thickness, output_path):
+def save_and_display_results(image, contours, skeleton, line_thickness, output_path, circularity_threshold=0.5):
+    """Annotate the image with contours and skeleton and save to output_path.
+
+    Cracks (circularity below threshold) are drawn in green; pores in blue.
+    The skeleton is dilated to line_thickness and overlaid in red.
+    """
     result = image.copy()
 
     for cnt, circularity in contours:
-        color = (255, 0, 0) if circularity > 0.6 else (0, 255, 0)
+        color = (255, 0, 0) if circularity > circularity_threshold else (0, 255, 0)
         cv2.drawContours(result, [cnt], -1, color, line_thickness)
         
     skeleton_uint8 = (skeleton * 255).astype(np.uint8)

@@ -128,8 +128,6 @@ class ContourEditor(QtWidgets.QWidget):
         return self.view.get_edited_contours(), self.circularity
 
 class ContourEditorView(QtWidgets.QGraphicsView):
-    #TODO: Add option to translate selected contours by dragging mouse
-    #TODO: Add option to rotate selected contours by dragging mouse
     def __init__(self, image, contours, line_thickness, circularity, parent=None):
         super().__init__(parent)
         self.image = image
@@ -265,8 +263,6 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             painter.end()
             
     def keyPressEvent(self, event):
-        print(f"Key pressed: {event.key()}")
-        
         if event.key() == QtCore.Qt.Key_U:
             if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active:
             
@@ -622,11 +618,18 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             self.contour_scale_factors[c_idx] = new_scale
         
 
-def run_contour_editor(image, contours, line_thickness, supress_instructions):
-    if not supress_instructions:
+def run_contour_editor(image, contours, line_thickness, suppress_instructions):
+    """Show an interactive contour editor and return the edited results.
+
+    Supports lasso selection, contour creation (C), deletion (D), move (M),
+    scale (S), rotate (R), and undo (U). A circularity slider controls the
+    threshold that separates cracks (blue) from pores (red).
+    Returns (contours, circularity_threshold).
+    """
+    if not suppress_instructions:
         show_instructions_window_contour_editor()
 
-    app = QtWidgets.QApplication(sys.argv)
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     editor_widget = ContourEditor(image, contours, line_thickness)
     editor_widget.setWindowTitle("Contour Editor (PyQt)")
 

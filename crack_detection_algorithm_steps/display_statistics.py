@@ -4,6 +4,13 @@ import tkinter as tk
 from tkinter import messagebox
 
 def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, area_of_interest, circularity_threshold):
+    """Compute and display defect statistics in a popup dialog.
+
+    Reports total area of interest, crack/pore areas and area fractions,
+    skeleton length, and skeleton length fraction — all converted to µm units
+    using um_per_pixel. Contours below circularity_threshold are classed as
+    cracks; those above are pores.
+    """
 
     skeleton_length = np.sum(skeleton > 0)
     real_skeleton_length = skeleton_length * um_per_pixel
@@ -33,7 +40,6 @@ def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, a
     
     text = (
         "-" * 20 + "\n\n"
-        f"Skeleton Length: {real_skeleton_length:.5f} um\n"
         f"Total Area of Interest: {area_of_interest_area * (um_per_pixel ** 2):.5f} um^2\n"
         f"Defect Area: {defect_area_um2:.5f} um^2\n"
         f"Defect Area Fraction: {defect_area_fraction:.5f}\n"

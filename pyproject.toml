@@ -1,7 +1,7 @@
 [project]
 name = "crack-detection-toolset"
 version = "0.1.0"
-description = "Add your description here"
+description = "Interactive GUI toolset for detecting and measuring cracks and pores in microscopy images"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

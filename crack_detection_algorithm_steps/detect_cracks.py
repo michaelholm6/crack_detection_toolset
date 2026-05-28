@@ -10,6 +10,14 @@ os.environ["QT_LOGGING_RULES"] = "*.warning=false"
 def detect_edges(blurred, crack_expansion, model_path='model.yml.gz',
                  confidence_threshold=0.15, aoi_pts=None,
                  max_dim=3000):
+    """Run structured edge detection and return a binary edge mask.
+
+    Images larger than max_dim on their longest side are downscaled before
+    detection and the returned scale_factor can be used to map contours back
+    to original coordinates. The edge mask is morphologically closed with
+    crack_expansion to connect nearby edges.
+    Returns (edge_mask_uint8, scale_factor).
+    """
     h, w = blurred.shape[:2]
     scale_factor = min(1.0, max_dim / max(h, w))
 
@@ -298,6 +306,11 @@ class CrackDetectionGUI(QtWidgets.QWidget):
 
 
 def detect_cracks(original_image, blurred_image, area_of_interest_pts, suppress_instructions=False):
+    """Show an interactive GUI for tuning crack detection parameters.
+
+    Exposes confidence threshold, morphological expansion, and contour line
+    thickness via sliders. Returns (contours, line_thickness).
+    """
     if not suppress_instructions:
         root = tk.Tk()
         root.title("Instructions")
