@@ -2,6 +2,39 @@ import cv2
 import ctypes
 import tkinter as tk
 from tkinter import messagebox
+from PyQt5 import QtWidgets, QtCore
+
+
+_OK_BUTTON_STYLE = """
+    QPushButton {
+        background-color: #0078d7;
+        color: white;
+        border-radius: 6px;
+        padding: 10px 24px;
+        font-weight: bold;
+        font-size: 16px;
+    }
+    QPushButton:hover {
+        background-color: #005a9e;
+    }
+    QPushButton:pressed {
+        background-color: #004578;
+    }
+"""
+
+
+def make_ok_button(text="OK"):
+    """Return a styled blue button used to advance to the next pipeline step."""
+    button = QtWidgets.QPushButton(text)
+    button.setStyleSheet(_OK_BUTTON_STYLE)
+    button.setCursor(QtCore.Qt.PointingHandCursor)
+    return button
+
+
+class WorkflowCancelled(Exception):
+    """Raised when the user closes (X's out of) a step window instead of
+    advancing with the OK button, so the pipeline can stop gracefully."""
+    pass
 
 def resize_for_display(img, max_width, max_height):
     h, w = img.shape[:2]

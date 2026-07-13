@@ -23,10 +23,12 @@ def show_instructions_window_contour_editor():
         "- Press 'S' to scale selected points (drag mouse relative to center).\n"
         "- Press 'M' to move selected points (drag mouse).\n"
         "- Press 'R' to rotate selected points (drag mouse relative to center).\n"
+        "- Press 'P' to enter point connection mode, then click two points on the\n"
+        "  same contour to split it into two separate contours along that line.\n"
         "- Use the mouse wheel to zoom in and out.\n"
         "- Press 'Esc' to cancel and close the application.\n"
         "- Press the same key again or left click to exit a mode.\n\n"
-        "When you're done, simply close the window to continue."
+        "When you're done, click the blue OK button to continue."
     )
 
     label = tk.Label(root, text=instructions, justify="left", padx=20, pady=20, font=("Helvetica", 12))
@@ -54,6 +56,7 @@ class ContourEditor(QtWidgets.QWidget):
         self.original_contours = contours
         self.contours = [c.copy() for c in contours]
         self.circularity = 0.5  # Default circularity value
+        self.accepted = False  # set True only when the OK button is used
 
         # Create a QGraphicsView (your existing viewer)
         self.view = ContourEditorView(image, contours, line_thickness, self.circularity)
@@ -115,7 +118,16 @@ class ContourEditor(QtWidgets.QWidget):
         layout.addWidget(self.view)
         layout.addLayout(label_layout)  # add label + icon layout
         layout.addWidget(self.slider)
+
+        self.ok_button = utils.make_ok_button("OK — Continue")
+        self.ok_button.clicked.connect(self.accept_and_continue)
+        layout.addWidget(self.ok_button)
+
         self.setLayout(layout)
+
+    def accept_and_continue(self):
+        self.accepted = True
+        self.close()
 
     def update_circularity(self, value):
         new_circularity = value / 100.0
@@ -132,7 +144,10 @@ class ContourEditorView(QtWidgets.QGraphicsView):
         super().__init__(parent)
         self.image = image
         self.original_contours = contours
-        self.contours = [c.copy() for c in contours]
+        # Keep contours as float internally so repeated move/scale/rotate edits
+        # don't accumulate rounding error; they're rounded to int only when
+        # drawn and when returned via get_edited_contours().
+        self.contours = [c.astype(np.float32) for c in contours]
         self.selected_points = set()
         self.scaling_active = False
         self.mouse_pos = None
@@ -148,8 +163,10 @@ class ContourEditorView(QtWidgets.QGraphicsView):
         self.rotation_start_mouse_pos = None
         self.contours_original_for_rotation = None 
         self.creating_contour = False
-        self.new_contour_points = [] 
+        self.new_contour_points = []
         self.currently_creating_contour = False
+        self.connecting_active = False
+        self.connection_points = []  # list of (c_idx, pt_idx) picked in Point Connection mode
         self.current_mode = "Selection"
         self.circularity = circularity
         self.line_thickness = line_thickness
@@ -186,28 +203,28 @@ class ContourEditorView(QtWidgets.QGraphicsView):
         
         # Loop through contours and connect the points with red lines
         for c_idx, cnt in enumerate(self.contours):
+            cnt_int = np.round(cnt).astype(np.int32).reshape(-1, 1, 2)
+            points = [tuple(int(v) for v in p) for p in cnt_int.reshape(-1, 2)]
+
             if self.currently_creating_contour and c_idx == len(self.contours) - 1:
-                points = [tuple(pt[0]) for pt in cnt]
-                
                 if measure_contour_circularity([cnt])[0] > self.circularity:
-                    color = (0, 0, 255)  
+                    color = (0, 0, 255)
                 else:
                     color = (255, 0, 0)
-                
-                cv2.polylines(img, [np.array(points)], isClosed=False, color=color, thickness=self.line_thickness)
+
+                cv2.polylines(img, [cnt_int], isClosed=False, color=color, thickness=self.line_thickness)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
                         cv2.circle(img, point, self.line_thickness, (255, 0, 0), -1)  # Blue highlight
                     else:
                         cv2.circle(img, point, int(self.line_thickness/2), (0, 255, 0), -1)  # Green default
-            
-            else:            
-                points = [tuple(pt[0]) for pt in cnt]
+
+            else:
                 if measure_contour_circularity([cnt])[0] > self.circularity:
-                    color = (0, 0, 255)  
+                    color = (0, 0, 255)
                 else:
                     color = (255, 0, 0)
-                cv2.polylines(img, [np.array(points)], isClosed=True, color=color, thickness=self.line_thickness)
+                cv2.polylines(img, [cnt_int], isClosed=True, color=color, thickness=self.line_thickness)
                 for pt_idx, point in enumerate(points):
                     if (c_idx, pt_idx) in self.selected_points:
                         cv2.circle(img, point, self.line_thickness, (255, 0, 0), -1)  # Blue highlight
@@ -219,6 +236,13 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             x1, y1 = int(self.mouse_pos.x()), int(self.mouse_pos.y())
             x2, y2 = int(img_center.x()), int(img_center.y())
             cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), self.line_thickness)
+
+        # Preview the connecting line while the second point is being chosen
+        if self.connecting_active and len(self.connection_points) == 1 and self.mouse_pos:
+            c_idx, pt_idx = self.connection_points[0]
+            px, py = self.contours[c_idx][pt_idx][0]
+            mx, my = int(self.mouse_pos.x()), int(self.mouse_pos.y())
+            cv2.line(img, (int(px), int(py)), (mx, my), (0, 255, 255), self.line_thickness)
 
         # Convert the image to QImage for PyQt rendering
         height, width, _ = img.shape
@@ -264,15 +288,15 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_U:
-            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active:
-            
+            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active and not self.connecting_active:
+
                 if self.undo_stack:
                     self.contours = self.undo_stack.pop()
                     self.selected_points.clear()
                     self.update_display()
 
         elif event.key() == QtCore.Qt.Key_D:
-            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active:
+            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active and not self.connecting_active:
                 self.delete_selected_points()
                 self.update_display()
                 
@@ -280,7 +304,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             sys.exit(0)  # quit python script entirely
 
         elif event.key() == QtCore.Qt.Key_S:
-            if not self.creating_contour and not self.moving_active and not self.rotating_active:
+            if not self.creating_contour and not self.moving_active and not self.rotating_active and not self.connecting_active:
                 self.scaling_active = not self.scaling_active
                 if self.scaling_active:
                         self.current_mode = "Scaling" if self.scaling_active else ""
@@ -322,7 +346,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                 self.update_display()
             
         elif event.key() == QtCore.Qt.Key_M:
-            if not self.creating_contour and not self.scaling_active and not self.rotating_active:
+            if not self.creating_contour and not self.scaling_active and not self.rotating_active and not self.connecting_active:
                 self.moving_active = not self.moving_active
                 if self.moving_active:
                     self.current_mode = "Moving" if self.moving_active else ""
@@ -340,7 +364,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                 self.update_display()
             
         elif event.key() == QtCore.Qt.Key_R:
-            if not self.creating_contour and not self.scaling_active and not self.moving_active:
+            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.connecting_active:
                 self.rotating_active = not self.rotating_active
                 if self.rotating_active:
                     self.current_mode = "Rotating" if self.rotating_active else ""
@@ -372,8 +396,17 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                     self.rotation_start_angle = None
                 self.update_display()
             
+        elif event.key() == QtCore.Qt.Key_P:
+            if not self.creating_contour and not self.scaling_active and not self.moving_active and not self.rotating_active:
+                self.connecting_active = not self.connecting_active
+                self.connection_points = []
+                self.selected_points.clear()
+                self.current_mode = "Point Connection" if self.connecting_active else "Selection"
+                self.viewport().update()
+                self.update_display()
+
         elif event.key() == QtCore.Qt.Key_C:
-            if self.moving_active or self.scaling_active or self.rotating_active:
+            if self.moving_active or self.scaling_active or self.rotating_active or self.connecting_active:
                 return  # Don't allow drawing during other modes
 
             if self.creating_contour:
@@ -392,7 +425,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                 self.undo_stack.append([c.copy() for c in self.contours])
                 self.creating_contour = True
                 self.new_contour_points.clear()
-                self.contours.append(np.array([], dtype=np.int32).reshape((-1, 1, 2)))
+                self.contours.append(np.array([], dtype=np.float32).reshape((-1, 1, 2)))
 
             self.update_display()
 
@@ -401,6 +434,12 @@ class ContourEditorView(QtWidgets.QGraphicsView):
         
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
+            # Point Connection mode intercepts left clicks to pick two points to split a contour
+            if self.connecting_active:
+                self.handle_connection_click(event)
+                super().mousePressEvent(event)
+                return
+
             # Deactivate all modes
             if not self.creating_contour:
                 self.scaling_active = False
@@ -433,7 +472,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                 scene_pos = self.mapToScene(event.pos())
                 x, y = int(scene_pos.x()), int(scene_pos.y())
                 self.new_contour_points.append((x, y))
-                self.contours[-1] = np.array(self.new_contour_points, dtype=np.int32).reshape((-1, 1, 2))
+                self.contours[-1] = np.array(self.new_contour_points, dtype=np.float32).reshape((-1, 1, 2))
 
             self.update_display()
 
@@ -459,9 +498,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             for pt_idx, pt in enumerate(cnt):
                 if (c_idx, pt_idx) in self.selected_points:
                     x, y = pt[0]
-                    new_x = int(x + dx)
-                    new_y = int(y + dy)
-                    cnt[pt_idx][0] = [new_x, new_y]
+                    cnt[pt_idx][0] = [x + dx, y + dy]
 
     def mouseMoveEvent(self, event):
         self.mouse_pos = self.mapToScene(event.pos())
@@ -530,8 +567,11 @@ class ContourEditorView(QtWidgets.QGraphicsView):
                     self.selected_points.add((c_idx, pt_idx))
 
     def get_edited_contours(self):
-        return self.contours
-    
+        # Round the float working copies back to integer pixel coordinates for
+        # downstream OpenCV drawing/measurement, dropping any degenerate contour
+        # left with fewer than 3 points.
+        return [np.round(c).astype(np.int32) for c in self.contours if len(c) >= 3]
+
     def delete_selected_points(self):
         new_contours = []
         for c_idx, cnt in enumerate(self.contours):
@@ -539,11 +579,74 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             for pt_idx, pt in enumerate(cnt):
                 if (c_idx, pt_idx) not in self.selected_points:
                     new_cnt.append(pt)
-            if new_cnt:
-                new_contours.append(np.array(new_cnt, dtype=np.int32))
+            # Auto-delete any contour reduced to 2 or fewer points (can't form a polygon)
+            if len(new_cnt) >= 3:
+                new_contours.append(np.array(new_cnt, dtype=np.float32))
         self.undo_stack.append(self.contours.copy())
         self.contours = new_contours
         self.selected_points.clear()
+
+    def find_nearest_point(self, x, y):
+        """Return (c_idx, pt_idx) of the contour point closest to (x, y), or None."""
+        best = None
+        best_dist = None
+        for c_idx, cnt in enumerate(self.contours):
+            for pt_idx, pt in enumerate(cnt):
+                px, py = pt[0]
+                d = (px - x) ** 2 + (py - y) ** 2
+                if best_dist is None or d < best_dist:
+                    best_dist = d
+                    best = (c_idx, pt_idx)
+        return best
+
+    def handle_connection_click(self, event):
+        """Pick points in Point Connection mode; split the contour once two are chosen."""
+        scene_pos = self.mapToScene(event.pos())
+        picked = self.find_nearest_point(scene_pos.x(), scene_pos.y())
+        if picked is None:
+            return
+
+        # Both points must be on the same contour; ignore a repeated pick of the same point
+        if self.connection_points and (picked == self.connection_points[0] or
+                                       picked[0] != self.connection_points[0][0]):
+            return
+
+        self.connection_points.append(picked)
+        self.selected_points.add(picked)
+
+        if len(self.connection_points) == 2:
+            self.split_contour_at_connection()
+            self.connection_points = []
+            self.selected_points.clear()
+            self.connecting_active = False
+            self.current_mode = "Selection"
+            self.viewport().update()
+
+        self.update_display()
+
+    def split_contour_at_connection(self):
+        """Split the shared contour into two along the line between the two picked points."""
+        (c_idx, i1), (_, i2) = self.connection_points
+        cnt = self.contours[c_idx]
+        n = len(cnt)
+        i, j = sorted((i1, i2))
+
+        # Each resulting arc keeps both endpoints; both need >= 3 points to be a valid polygon
+        arc1 = cnt[i:j + 1]
+        arc2 = np.concatenate([cnt[j:], cnt[:i + 1]])
+        if len(arc1) < 3 or len(arc2) < 3:
+            return
+
+        self.undo_stack.append([c.copy() for c in self.contours])
+
+        new_contours = []
+        for idx, c in enumerate(self.contours):
+            if idx == c_idx:
+                new_contours.append(np.array(arc1, dtype=np.float32).reshape((-1, 1, 2)))
+                new_contours.append(np.array(arc2, dtype=np.float32).reshape((-1, 1, 2)))
+            else:
+                new_contours.append(c)
+        self.contours = new_contours
 
     def rotate_selected_points(self):
         if not self.rotation_reference or not self.mouse_pos or self.rotation_start_angle is None:
@@ -577,7 +680,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
             new_x = cx + radius * np.cos(new_angle)
             new_y = cy + radius * np.sin(new_angle)
 
-            self.contours[c_idx][pt_idx][0] = [int(new_x), int(new_y)]
+            self.contours[c_idx][pt_idx][0] = [new_x, new_y]
         
     def scale_selected_points(self):
         if not self.selected_points or not self.mouse_pos or not self.scaling_initial_distance:
@@ -608,9 +711,7 @@ class ContourEditorView(QtWidgets.QGraphicsView):
 
             ox, oy = cnt_orig[pt_idx][0]
             dx, dy = ox - cx, oy - cy
-            new_x = int(cx + dx * new_scale)
-            new_y = int(cy + dy * new_scale)
-            cnt[pt_idx][0] = [new_x, new_y]
+            cnt[pt_idx][0] = [cx + dx * new_scale, cy + dy * new_scale]
 
             updated_contours.add(c_idx)
 
@@ -622,7 +723,7 @@ def run_contour_editor(image, contours, line_thickness, suppress_instructions):
     """Show an interactive contour editor and return the edited results.
 
     Supports lasso selection, contour creation (C), deletion (D), move (M),
-    scale (S), rotate (R), and undo (U). A circularity slider controls the
+    scale (S), rotate (R), point-connection split (P), and undo (U). A circularity slider controls the
     threshold that separates cracks (blue) from pores (red).
     Returns (contours, circularity_threshold).
     """
@@ -638,13 +739,11 @@ def run_contour_editor(image, contours, line_thickness, suppress_instructions):
 
     editor_widget.showMaximized()
 
-    result = {}
-
-    def on_exit():
-        final_contours, final_circularity = editor_widget.get_results()
-        result['contours'] = final_contours
-        result['circularity'] = final_circularity
-
-    app.aboutToQuit.connect(on_exit)
     app.exec_()
-    return result['contours'], result['circularity']
+
+    if not editor_widget.accepted:
+        raise utils.WorkflowCancelled("Contour editing was cancelled.")
+
+    # The widget persists after its window closes, so read results directly
+    # rather than via aboutToQuit (which would stay connected across steps).
+    return editor_widget.get_results()

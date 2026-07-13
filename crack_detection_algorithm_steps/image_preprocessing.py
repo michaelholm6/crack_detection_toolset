@@ -4,6 +4,7 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets, QtGui
 import tkinter as tk
 from tkinter import messagebox
+from utils import make_ok_button, WorkflowCancelled
 
 class PreprocessGUI(QtWidgets.QWidget):
     def __init__(self, image_path):
@@ -18,10 +19,16 @@ class PreprocessGUI(QtWidgets.QWidget):
         self.clip_limit = 2.0
         self.tile_grid_size = 8
 
+        self.accepted = False  # set True only when the OK button is used
+
         self.init_ui()
         self.update_image()
-        
+
         self.showMaximized()
+
+    def accept_and_continue(self):
+        self.accepted = True
+        self.close()
         
     def resizeEvent(self, event):
         self.update_image()
@@ -163,6 +170,10 @@ class PreprocessGUI(QtWidgets.QWidget):
         controls_layout.addLayout(tile_layout)
 
         main_layout.addLayout(controls_layout)
+
+        self.ok_button = make_ok_button("OK — Continue")
+        self.ok_button.clicked.connect(self.accept_and_continue)
+        main_layout.addWidget(self.ok_button)
 
         self.setLayout(main_layout)
 
@@ -310,9 +321,9 @@ def run_preprocess_gui(image_path, suppress_instructions=False):
             "Instructions for using the Image Preprocessing GUI:\n\n"
             "- Use the sliders and spin boxes to adjust blur kernel size, CLAHE clip limit, and tile grid size.\n"
             "- The original and post-processed images are shown side by side.\n"
-            "- Press ESC to quit the application.\n"
+            "- Press ESC to cancel and quit the application.\n"
             "- Adjust parameters to achieve the desired image enhancement.\n"
-            "- When finished, close the window.\n"
+            "- Click the blue OK button when finished to continue.\n"
         )
 
         label = tk.Label(root, text=instructions, justify="left", padx=20, pady=20, font=("Helvetica", 12))
@@ -345,18 +356,14 @@ def run_preprocess_gui(image_path, suppress_instructions=False):
 
     gui = PreprocessGUI(image_path)
 
-    result = {}
-
-    def capture_results():
-        result['original'] = gui.image
-        result['gray'] = gui.gray
-        result['post_processed'] = gui.post_processed
-
-    app.aboutToQuit.connect(capture_results)
-
     app.exec_()
 
     if owns_app:
         app.quit()
 
-    return result.get('original'), result.get('gray'), result.get('post_processed')
+    if not gui.accepted:
+        raise WorkflowCancelled("Preprocessing was cancelled.")
+
+    # The widget persists after its window closes, so read results directly
+    # rather than via aboutToQuit (which would stay connected across steps).
+    return gui.image, gui.gray, gui.post_processed

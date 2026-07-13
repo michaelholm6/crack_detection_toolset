@@ -164,14 +164,15 @@ class InputDialog(QtWidgets.QDialog):
         output_path = self.output_path_edit.text().strip()
         filename = self.output_filename_edit.text().strip()
 
-        valid_exts = ('.jpg', '.png', '.tiff')
+        valid_exts = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp')
+        valid_exts_text = ".jpg, .jpeg, .png, .tif, .tiff, or .bmp"
 
         errors = []
 
         if not image_path:
             errors.append("Please select an input image.")
         elif not image_path.lower().endswith(valid_exts):
-            errors.append("Input image must end with .jpg, .png, or .tiff.")
+            errors.append(f"Input image must end with {valid_exts_text}.")
 
         if not output_path:
             errors.append("Please select an output folder.")
@@ -179,7 +180,7 @@ class InputDialog(QtWidgets.QDialog):
         if not filename:
             errors.append("Please enter an output file name.")
         elif not filename.lower().endswith(valid_exts):
-            errors.append("Output file name must end with .jpg, .png,  .tif or .tiff.")
+            errors.append(f"Output file name must end with {valid_exts_text}.")
 
         if errors:
             self.run_button.setEnabled(False)
@@ -196,7 +197,7 @@ class InputDialog(QtWidgets.QDialog):
                 super().keyPressEvent(event)
 
     def browse_image(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.bmp)")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
         if path:
             self.image_path_edit.setText(path)
 
@@ -278,7 +279,7 @@ class InputDialog(QtWidgets.QDialog):
             full_output_path = filename or folder  # whichever is given or empty
 
         return {
-            "image_path": self.image_path_edit.text(),
+            "image_path": self.image_path_edit.text().strip(),
             "suppress_instructions": self.suppress_checkbox.isChecked(),
             "output_path": full_output_path
         }

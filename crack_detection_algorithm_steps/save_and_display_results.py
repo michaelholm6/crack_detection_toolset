@@ -19,7 +19,12 @@ def save_and_display_results(image, contours, skeleton, line_thickness, output_p
     thick_skeleton = thick_skeleton > 0
 
     result[thick_skeleton] = (0, 0, 255)  # Red for skeleton
-    
-    cv2.imwrite(output_path, result)
-    
+
+    # cv2.imwrite returns False (rather than raising) on failure, e.g. a missing
+    # output folder or an unwritable path -- surface that instead of silently
+    # reporting success.
+    if not cv2.imwrite(output_path, result):
+        raise IOError(f"Failed to save results to '{output_path}'. "
+                      "Check that the output folder exists and is writable.")
+
     return result

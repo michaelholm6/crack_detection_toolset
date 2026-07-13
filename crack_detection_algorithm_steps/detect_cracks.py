@@ -4,19 +4,36 @@ import cv2
 import numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import tkinter as tk
+from utils import make_ok_button, WorkflowCancelled
 
 os.environ["QT_LOGGING_RULES"] = "*.warning=false"
 
-def detect_edges(blurred, crack_expansion, model_path='model.yml.gz',
-                 confidence_threshold=0.15, aoi_pts=None,
-                 max_dim=3000):
-    """Run structured edge detection and return a binary edge mask.
+# Structured edge detectors are cached by resolved model path so the ~6 MB
+# model file is loaded and parsed only once per session instead of on every
+# call (which made every slider drag re-load the model).
+_edge_detector_cache = {}
 
-    Images larger than max_dim on their longest side are downscaled before
-    detection and the returned scale_factor can be used to map contours back
-    to original coordinates. The edge mask is morphologically closed with
-    crack_expansion to connect nearby edges.
-    Returns (edge_mask_uint8, scale_factor).
+
+def _get_edge_detector(model_path):
+    resolved = model_path
+    if getattr(sys, 'frozen', False):
+        resolved = os.path.join(sys._MEIPASS, model_path)
+    detector = _edge_detector_cache.get(resolved)
+    if detector is None:
+        detector = cv2.ximgproc.createStructuredEdgeDetection(resolved)
+        _edge_detector_cache[resolved] = detector
+    return detector
+
+
+def compute_edge_probability(blurred, model_path='model.yml.gz', max_dim=3000):
+    """Run the structured edge detector and return its raw edge probability map.
+
+    This is the expensive neural-network step. It depends only on the image and
+    the working resolution, not on the confidence/expansion parameters, so its
+    result can be cached and reused while the user tunes those parameters.
+    Images larger than max_dim on the longest side are downscaled first; the
+    returned scale_factor maps results back to original coordinates.
+    Returns (edge_probability_float, scale_factor).
     """
     h, w = blurred.shape[:2]
     scale_factor = min(1.0, max_dim / max(h, w))
@@ -24,18 +41,24 @@ def detect_edges(blurred, crack_expansion, model_path='model.yml.gz',
     if scale_factor < 1.0:
         blurred = cv2.resize(blurred, None, fx=scale_factor, fy=scale_factor,
                              interpolation=cv2.INTER_AREA)
-        if aoi_pts is not None:
-            aoi_pts = [(int(x * scale_factor), int(y * scale_factor)) for (x, y) in aoi_pts]
 
-    if getattr(sys, 'frozen', False):
-        model_path = os.path.join(sys._MEIPASS, model_path)
-
-    edge_detector = cv2.ximgproc.createStructuredEdgeDetection(model_path)
+    edge_detector = _get_edge_detector(model_path)
     blurred_float = blurred.astype(np.float32) / 255.0
     if len(blurred_float.shape) == 2:
         blurred_float = cv2.cvtColor(blurred_float, cv2.COLOR_GRAY2BGR)
 
-    edges = edge_detector.detectEdges(blurred_float)
+    return edge_detector.detectEdges(blurred_float), scale_factor
+
+
+def edges_to_mask(edges, crack_expansion, confidence_threshold=0.15,
+                  aoi_pts=None, scale_factor=1.0):
+    """Threshold + morphologically close an edge probability map into a mask.
+
+    This is the cheap post-processing step: it takes the cached probability map
+    from compute_edge_probability and applies the confidence threshold, the
+    crack-expansion morphology, and the optional area-of-interest clip. Cheap
+    enough to re-run on every slider change.
+    """
     filtered_edges = (edges > confidence_threshold).astype(np.uint8) * 255
 
     kernel = np.ones((crack_expansion, crack_expansion), np.uint8)
@@ -43,12 +66,28 @@ def detect_edges(blurred, crack_expansion, model_path='model.yml.gz',
     eroded = cv2.erode(dilated, kernel, iterations=1)
 
     if aoi_pts is not None:
+        if scale_factor < 1.0:
+            aoi_pts = [(int(x * scale_factor), int(y * scale_factor)) for (x, y) in aoi_pts]
         aoimask = np.zeros(eroded.shape[:2], dtype=np.uint8)
         polygon_np = np.array(aoi_pts, np.int32)
         cv2.fillPoly(aoimask, [polygon_np], 255)
         eroded = cv2.bitwise_and(eroded, aoimask)
 
-    return eroded, scale_factor
+    return eroded
+
+
+def detect_edges(blurred, crack_expansion, model_path='model.yml.gz',
+                 confidence_threshold=0.15, aoi_pts=None,
+                 max_dim=3000):
+    """Run structured edge detection and return a binary edge mask.
+
+    Convenience composition of compute_edge_probability + edges_to_mask for
+    one-shot detection (e.g. the final full-resolution pass).
+    Returns (edge_mask_uint8, scale_factor).
+    """
+    edges, scale_factor = compute_edge_probability(blurred, model_path, max_dim)
+    mask = edges_to_mask(edges, crack_expansion, confidence_threshold, aoi_pts, scale_factor)
+    return mask, scale_factor
 
 
 class ClickableSlider(QtWidgets.QSlider):
@@ -115,7 +154,7 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         self.conf_spin.editingFinished.connect(self.update_from_spin_boxes)
 
         self.crack_spin = QtWidgets.QSpinBox()
-        self.crack_spin.setRange(0, 50)
+        self.crack_spin.setRange(1, 20)  # match the slider; expansion of 0 makes an empty morphology kernel and crashes cv2.dilate
         self.crack_spin.setValue(self.crack_expansion)
         self.crack_spin.editingFinished.connect(self.update_from_spin_boxes)
 
@@ -164,12 +203,24 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         layout.addLayout(crack_layout)
         layout.addLayout(thickness_layout)
 
+        self.ok_button = make_ok_button("OK — Continue")
+        self.ok_button.clicked.connect(self.accept_and_continue)
+        layout.addWidget(self.ok_button)
+
         self.setLayout(layout)
         self.setWindowTitle("Crack Detection GUI")
 
+        # Cache for the expensive edge-probability map (computed once per image)
+        self.edge_prob = None
+        self.det_scale = 1.0
         self.final_contours = []
+        self.accepted = False  # set True only when the OK button is used
 
         self.showMaximized()
+
+    def accept_and_continue(self):
+        self.accepted = True
+        self.close()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent):
         if event.key() == QtCore.Qt.Key_Escape:
@@ -179,7 +230,8 @@ class CrackDetectionGUI(QtWidgets.QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.update_image()
+        self.recompute_contours()
+        self.redraw()
 
     def make_label_with_tooltip(self, text, tooltip_text):
         container = QtWidgets.QWidget()
@@ -215,6 +267,13 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         ):
             return
 
+        # Only the confidence/expansion parameters change the detected contours;
+        # line thickness only affects drawing, so avoid re-thresholding for it.
+        detection_changed = (
+            not np.isclose(new_conf, self.confidence_threshold, atol=1e-6)
+            or new_exp != self.crack_expansion
+        )
+
         self.confidence_threshold = new_conf
         self.crack_expansion = new_exp
         self.line_thickness = new_thick
@@ -229,7 +288,9 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         self.crack_slider.blockSignals(False)
         self.thickness_slider.blockSignals(False)
 
-        self.update_image()
+        if detection_changed:
+            self.recompute_contours()
+        self.redraw()
 
         self.last_applied_confidence = self.confidence_threshold
         self.last_applied_expansion = self.crack_expansion
@@ -237,8 +298,16 @@ class CrackDetectionGUI(QtWidgets.QWidget):
 
     def update_from_sliders(self):
         raw_value = self.conf_slider.value() / 100.0
-        self.confidence_threshold = max(0.01, raw_value)
-        self.crack_expansion = self.crack_slider.value()
+        new_conf = max(0.01, raw_value)
+        new_exp = self.crack_slider.value()
+
+        detection_changed = (
+            not np.isclose(new_conf, self.confidence_threshold, atol=1e-6)
+            or new_exp != self.crack_expansion
+        )
+
+        self.confidence_threshold = new_conf
+        self.crack_expansion = new_exp
         self.line_thickness = self.thickness_slider.value()
 
         self.conf_spin.blockSignals(True)
@@ -251,38 +320,41 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         self.crack_spin.blockSignals(False)
         self.thickness_spin.blockSignals(False)
 
-        self.update_image()
+        if detection_changed:
+            self.recompute_contours()
+        self.redraw()
 
         self.last_applied_confidence = self.confidence_threshold
         self.last_applied_expansion = self.crack_expansion
         self.last_applied_thickness = self.line_thickness
 
-    def update_image(self):
-        edges, scale_factor = detect_edges(
-            self.blurred_image,
+    def recompute_contours(self):
+        """Re-threshold the cached edge map into contours (no neural-net rerun)."""
+        if self.edge_prob is None:
+            # Expensive step: run the detector once, at the 1200px preview scale
+            self.edge_prob, self.det_scale = compute_edge_probability(
+                self.blurred_image, self.model_path, max_dim=1200)
+
+        mask = edges_to_mask(
+            self.edge_prob,
             self.crack_expansion,
-            self.model_path,
             self.confidence_threshold,
             aoi_pts=self.area_of_interest_pts,
-            max_dim=1200
+            scale_factor=self.det_scale,
         )
 
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if scale_factor < 1.0:
-            scaled_contours = []
-            for cnt in contours:
-                cnt = (cnt.astype(np.float32) / scale_factor).astype(np.int32)
-                scaled_contours.append(cnt)
-            contours = scaled_contours
-
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if self.det_scale < 1.0:
+            contours = [(cnt.astype(np.float32) / self.det_scale).astype(np.int32) for cnt in contours]
         self.final_contours = contours
 
+    def redraw(self):
+        """Draw the current contours over the image (cheap; used for every update)."""
         display_img = self.original_image.copy()
         if self.area_of_interest_pts:
             cv2.polylines(display_img, [np.array(self.area_of_interest_pts, np.int32)],
                           True, (0, 255, 255), self.line_thickness)
-        cv2.drawContours(display_img, contours, -1, (0, 0, 255), self.line_thickness)
+        cv2.drawContours(display_img, self.final_contours, -1, (0, 0, 255), self.line_thickness)
 
         display_img_rgb = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
         h, w, ch = display_img_rgb.shape
@@ -298,7 +370,7 @@ class CrackDetectionGUI(QtWidgets.QWidget):
         self.image_label.setPixmap(scaled_pixmap)
 
     def resizeEvent(self, event):
-        self.update_image()
+        self.redraw()
         super().resizeEvent(event)
 
     def get_final_results(self):
@@ -320,8 +392,8 @@ def detect_cracks(original_image, blurred_image, area_of_interest_pts, suppress_
             "- Crack expansion: controls crack thickness and connectivity.\n"
             "- Line thickness: changes contour line width.\n"
             "The image updates in real-time.\n"
-            "Press ESC to exit and close the application.\n"
-            "Close the window when done.\n"
+            "Press ESC to cancel and close the application.\n"
+            "Click the blue OK button when done to continue.\n"
         )
         label = tk.Label(root, text=instructions, justify="left", padx=20, pady=20, font=("Helvetica", 12))
         label.pack()
@@ -347,7 +419,31 @@ def detect_cracks(original_image, blurred_image, area_of_interest_pts, suppress_
     gui = CrackDetectionGUI(original_image, blurred_image, area_of_interest_pts)
     gui.show()
     app.exec_()
-    contours, line_thickness = gui.get_final_results()
+
+    if not gui.accepted:
+        if close_app_after:
+            app.quit()
+        raise WorkflowCancelled("Crack detection was cancelled.")
+
+    # The interactive GUI detects on a 1200px preview for responsiveness. Re-run
+    # detection once at full resolution (detect_edges' default 3000px ceiling)
+    # with the parameters the user settled on, so all downstream area/skeleton
+    # measurements come from the sharpest available contours.
+    confidence_threshold = gui.confidence_threshold
+    crack_expansion = gui.crack_expansion
+    line_thickness = gui.line_thickness
+
+    print("Running full-resolution crack detection with the selected parameters...")
+    edges, scale_factor = detect_edges(
+        blurred_image,
+        crack_expansion,
+        confidence_threshold=confidence_threshold,
+        aoi_pts=area_of_interest_pts,
+    )
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if scale_factor < 1.0:
+        contours = [(cnt.astype(np.float32) / scale_factor).astype(np.int32) for cnt in contours]
 
     if close_app_after:
         app.quit()

@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 import tkinter as tk
 from tkinter import messagebox
+from crack_detection_algorithm_steps.compute_crack_skeleton import measure_skeleton_length
 
 def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, area_of_interest, circularity_threshold):
     """Compute and display defect statistics in a popup dialog.
@@ -12,7 +13,7 @@ def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, a
     cracks; those above are pores.
     """
 
-    skeleton_length = np.sum(skeleton > 0)
+    skeleton_length = measure_skeleton_length(skeleton)
     real_skeleton_length = skeleton_length * um_per_pixel
     defect_area = 0
     crack_area = 0
@@ -31,12 +32,18 @@ def display_statistics(cracks_and_crack_circularities, um_per_pixel, skeleton, a
     crack_area_um2 = crack_area * (um_per_pixel ** 2)
     pore_area_um2 = pore_area * (um_per_pixel ** 2)
     area_of_interest_area = cv2.contourArea(np.array(area_of_interest, dtype=np.int32))
-    defect_area_fraction = defect_area_um2 / (area_of_interest_area * (um_per_pixel ** 2))
-    crack_area_fraction = crack_area_um2 / (area_of_interest_area * (um_per_pixel ** 2))
-    pore_area_fraction = pore_area_um2 / (area_of_interest_area * (um_per_pixel ** 2))
-    
-    
-    skeleton_length_fraction = skeleton_length / area_of_interest_area
+    aoi_area_um2 = area_of_interest_area * (um_per_pixel ** 2)
+
+    # Guard against a degenerate (zero-area) region of interest
+    if aoi_area_um2 <= 0:
+        defect_area_fraction = crack_area_fraction = pore_area_fraction = 0.0
+        skeleton_length_fraction = 0.0
+    else:
+        defect_area_fraction = defect_area_um2 / aoi_area_um2
+        crack_area_fraction = crack_area_um2 / aoi_area_um2
+        pore_area_fraction = pore_area_um2 / aoi_area_um2
+        # Skeleton length per unit area, in real units (µm / µm² = 1/µm) to match the "/um" label below
+        skeleton_length_fraction = real_skeleton_length / aoi_area_um2
     
     text = (
         "-" * 20 + "\n\n"

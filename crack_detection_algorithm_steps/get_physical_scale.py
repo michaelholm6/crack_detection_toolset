@@ -2,101 +2,123 @@ import sys
 import numpy as np
 import cv2
 from PyQt5 import QtWidgets, QtCore, QtGui
+from utils import WorkflowCancelled
 
-class ClickableLabel(QtWidgets.QLabel):
-    clicked = QtCore.pyqtSignal(QtCore.QPoint)
 
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.clicked.emit(event.pos())
-        super().mousePressEvent(event)
+class ScaleBarPicker(QtWidgets.QGraphicsView):
+    """Zoomable/pannable view for clicking the two ends of a scale bar.
 
-class ScaleBarPicker(QtWidgets.QWidget):
+    Clicks are recorded in scene coordinates, which map 1:1 to original image
+    pixels regardless of zoom, so the user can zoom in for sub-pixel precision
+    instead of being limited by the on-screen display size. Mouse wheel zooms,
+    right-drag pans.
+    """
+
     def __init__(self, image, line_thickness, suppress_instructions=False):
         super().__init__()
-        
         self.setWindowTitle("Draw Scale Bar")
-        self.image_orig = image.copy()
-        self.suppress_instructions = suppress_instructions
+
+        self.image = image.copy()
         self.line_thickness = line_thickness
+        self.scale_bar_pts = []   # list of QtCore.QPointF in image coordinates
+        self.um_per_pixel = None
+        self._asking = False
 
-        self.scale_bar_pts = []
+        # Scene with the full-resolution image
+        self.scene = QtWidgets.QGraphicsScene(self)
+        self.setScene(self.scene)
+        img_rgb = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
+        h, w = img_rgb.shape[:2]
+        qimg = QtGui.QImage(img_rgb.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
+        self.pixmap_item = self.scene.addPixmap(QtGui.QPixmap.fromImage(qimg))
 
-        self.label = ClickableLabel(self)
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
-        self.label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.label.clicked.connect(self.on_label_clicked)
+        self.setRenderHint(QtGui.QPainter.Antialiasing)
+        self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
+        self.setMouseTracking(True)
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.label)
+        self.pan_active = False
+        self.last_mouse_pos = None
+        self._initial_fit_done = False
 
-        if not self.suppress_instructions:
-            QtWidgets.QMessageBox.information(self, "Instructions",
-                "Click exactly two points on the image to define the scale bar.\n"
+        # Show the instructions first; only open the scale-bar window once the
+        # user dismisses them.
+        if not suppress_instructions:
+            QtWidgets.QMessageBox.information(
+                None, "Instructions",
+                "Click exactly two points on the ends of the scale bar.\n\n"
+                "Zoom in with the mouse wheel and right-click-drag to pan so you "
+                "can place each point precisely.\n"
                 "Press 'Esc' to cancel and close the application.\n")
 
         self.showMaximized()
-        self.update_display()
-        
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_fit_done:
+            self.fitInView(self.pixmap_item, QtCore.Qt.KeepAspectRatio)
+            self._initial_fit_done = True
+
     def keyPressEvent(self, event: QtGui.QKeyEvent):
-            if event.key() == QtCore.Qt.Key_Escape:
-                sys.exit(0)  # quit python script entirely
-            else:
-                super().keyPressEvent(event)
+        if event.key() == QtCore.Qt.Key_Escape:
+            sys.exit(0)  # quit python script entirely
+        else:
+            super().keyPressEvent(event)
 
-    def resizeEvent(self, event):
-        self.update_display()
-        super().resizeEvent(event)
+    def wheelEvent(self, event):
+        factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
+        self.scale(factor, factor)
+        self.viewport().update()
 
-    def update_display(self):
-        label_w, label_h = self.label.width(), self.label.height()
-        h_orig, w_orig = self.image_orig.shape[:2]
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            if self._asking or len(self.scale_bar_pts) >= 2:
+                return
+            self.scale_bar_pts.append(self.mapToScene(event.pos()))
+            self.viewport().update()
+            if len(self.scale_bar_pts) == 2:
+                self._asking = True
+                QtCore.QTimer.singleShot(100, self.ask_real_length)
+        elif event.button() == QtCore.Qt.RightButton:
+            self.pan_active = True
+            self.last_mouse_pos = event.pos()
+            self.setCursor(QtCore.Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
 
-        scale_w = label_w / w_orig if w_orig > 0 else 1
-        scale_h = label_h / h_orig if h_orig > 0 else 1
-        self.scale_factor = min(scale_w, scale_h)
+    def mouseMoveEvent(self, event):
+        if self.pan_active and self.last_mouse_pos is not None:
+            delta = event.pos() - self.last_mouse_pos
+            self.last_mouse_pos = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self.viewport().update()
+        super().mouseMoveEvent(event)
 
-        self.new_w = max(1, int(w_orig * self.scale_factor))
-        self.new_h = max(1, int(h_orig * self.scale_factor))
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.RightButton:
+            self.pan_active = False
+            self.setCursor(QtCore.Qt.ArrowCursor)
+        super().mouseReleaseEvent(event)
 
-        resized_img = cv2.resize(self.image_orig, (self.new_w, self.new_h), interpolation=cv2.INTER_AREA)
-        img_rgb = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
+    def paintEvent(self, event):
+        super().paintEvent(event)  # draw the image normally
+        if not self.scale_bar_pts:
+            return
 
-        qimg = QtGui.QImage(img_rgb.data, self.new_w, self.new_h, 3 * self.new_w, QtGui.QImage.Format_RGB888)
-        self.pixmap = QtGui.QPixmap.fromImage(qimg)
-
-        # Draw points & line on pixmap copy
-        pixmap_copy = self.pixmap.copy()
-        painter = QtGui.QPainter(pixmap_copy)
-        pen = QtGui.QPen(QtCore.Qt.red)
-        pen.setWidth(4)
+        painter = QtGui.QPainter(self.viewport())
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        pen = QtGui.QPen(QtGui.QColor(255, 0, 0))
+        pen.setWidth(2)
         painter.setPen(pen)
 
-        for pt in self.scale_bar_pts:
-            painter.drawEllipse(pt, self.line_thickness, self.line_thickness)
-        if len(self.scale_bar_pts) == 2:
-            painter.drawLine(self.scale_bar_pts[0], self.scale_bar_pts[1])
+        # Map scene (image) coordinates to viewport so markers stay a constant
+        # on-screen size no matter the zoom level.
+        pts_vp = [self.mapFromScene(pt) for pt in self.scale_bar_pts]
+        for p in pts_vp:
+            painter.drawEllipse(p, 5, 5)
+        if len(pts_vp) == 2:
+            painter.drawLine(pts_vp[0], pts_vp[1])
         painter.end()
-
-        self.label.setPixmap(pixmap_copy)
-
-    def on_label_clicked(self, pos):
-        label_w, label_h = self.label.width(), self.label.height()
-        offset_x = (label_w - self.new_w) // 2
-        offset_y = (label_h - self.new_h) // 2
-
-        # Check if click is inside the image
-        if (offset_x <= pos.x() <= offset_x + self.new_w) and (offset_y <= pos.y() <= offset_y + self.new_h):
-            # Adjust pos relative to the image
-            img_x = pos.x() - offset_x
-            img_y = pos.y() - offset_y
-
-            self.scale_bar_pts.append(QtCore.QPoint(img_x, img_y))
-            self.update_display()
-
-            if len(self.scale_bar_pts) == 2:
-                QtCore.QTimer.singleShot(100, self.ask_real_length)
 
     def ask_real_length(self):
         length, ok = QtWidgets.QInputDialog.getDouble(
@@ -110,26 +132,24 @@ class ScaleBarPicker(QtWidgets.QWidget):
 
         if ok and length > 0:
             p1, p2 = self.scale_bar_pts
-            x1, y1 = p1.x(), p1.y()
-            x2, y2 = p2.x(), p2.y()
+            pixel_length = np.hypot(p2.x() - p1.x(), p2.y() - p1.y())
+            if pixel_length > 0:
+                self.um_per_pixel = (length * 1000) / pixel_length
+                self.close()
+                return
 
-            px1, py1 = x1 / self.scale_factor, y1 / self.scale_factor
-            px2, py2 = x2 / self.scale_factor, y2 / self.scale_factor
+        # Cancelled or invalid: reset so the user can pick again
+        self.scale_bar_pts = []
+        self._asking = False
+        self.viewport().update()
 
-            pixel_length = np.hypot(px2 - px1, py2 - py1)
-            um_per_pixel = (length * 1000) / pixel_length
-
-            self.um_per_pixel = um_per_pixel
-            self.close()
-        else:
-            self.scale_bar_pts = []
-            self.update_display()
 
 def get_scale_from_user(image, line_thickness, suppress_instructions=False):
     """Show an interactive window for calibrating the physical scale.
 
     The user clicks two endpoints on a scale bar and enters its real-world
-    length in millimeters. Returns µm per pixel as a float.
+    length in millimeters. The view can be zoomed and panned so the endpoints
+    can be placed with sub-pixel precision. Returns µm per pixel as a float.
     Raises ValueError if the user closes without completing calibration.
     """
     app = QtWidgets.QApplication.instance()
@@ -148,6 +168,7 @@ def get_scale_from_user(image, line_thickness, suppress_instructions=False):
         app.quit()
 
     if scale is None:
-        raise ValueError("Scale bar was not defined.")
+        # Window was closed (X'd out) without completing calibration
+        raise WorkflowCancelled("Scale-bar calibration was cancelled.")
 
     return scale

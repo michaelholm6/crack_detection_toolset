@@ -1,8 +1,9 @@
 import sys
 import tkinter as tk
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QKeyEvent
 from PyQt5.QtCore import Qt, QPoint, QTimer
+from utils import make_ok_button, WorkflowCancelled
 
 def get_polygon_from_user(image, suppress_instructions=False):
     """Show an interactive window for the user to draw a polygon ROI.
@@ -22,10 +23,11 @@ def get_polygon_from_user(image, suppress_instructions=False):
         "- You will now select your area of interest by drawing a polygon on the image.\n"
         "- The polygon should outline the area where you want to detect cracks.\n"
         "- Left click to add points and outline your polygon.\n"
-        "- Press 'C' to close the polygon and exit the window.\n"
         "- Press 'R' to reset points.\n"
         "- Press 'Esc' to cancel and close the application.\n"
-        "- When finished, close the window.\n"
+        "- Click the blue OK button (or press 'C') when finished to continue.\n"
+        "- If you click OK without drawing a polygon, the entire image is used\n"
+        "  as the area of interest.\n"
     )
 
         label = tk.Label(root, text=instructions, justify="left", padx=20, pady=20, font=("Helvetica", 12))
@@ -59,18 +61,46 @@ def get_polygon_from_user(image, suppress_instructions=False):
             self.orig_height, self.orig_width = image.shape[:2]
             self.polygon_points = []
             self.polygon_closed = False
-            self.showMaximized()
+            self.accepted = False  # set True only when OK/Continue (not the X) is used
             self.setMouseTracking(True)
+
+            # Blue OK button floating at the bottom to advance to the next step
+            layout = QVBoxLayout(self)
+            layout.addStretch()
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+            self.ok_button = make_ok_button("OK — Continue")
+            self.ok_button.clicked.connect(self.finish_polygon)
+            btn_row.addWidget(self.ok_button)
+            btn_row.addStretch()
+            layout.addLayout(btn_row)
+
+            self.showMaximized()
+
+        def finish_polygon(self):
+            self.accepted = True
+            if len(self.polygon_points) > 2:
+                self.polygon_closed = True
+                self.update()
+                QTimer.singleShot(300, self.close)
+            else:
+                # No polygon drawn: advance and let the whole image be the ROI
+                self.close()
 
         def resizeEvent(self, event):
             self.update_scaled_pixmap()
 
         def update_scaled_pixmap(self):
-            window_size = self.size()
+            # Reserve a strip at the bottom for the OK button so the image is
+            # drawn above it rather than underneath it.
+            reserved = self.ok_button.sizeHint().height() + 50
+            avail_w = self.width()
+            avail_h = max(1, self.height() - reserved)
+
             qimg = self.numpy_to_qpixmap(self.orig_image)
-            self.scaled_pixmap = qimg.scaled(window_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.scaled_pixmap = qimg.scaled(avail_w, avail_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.offset_x = (self.width() - self.scaled_pixmap.width()) // 2
-            self.offset_y = (self.height() - self.scaled_pixmap.height()) // 2
+            self.offset_y = (avail_h - self.scaled_pixmap.height()) // 2
             self.scale_x = self.scaled_pixmap.width() / self.orig_width
             self.scale_y = self.scaled_pixmap.height() / self.orig_height
             self.update()
@@ -119,12 +149,7 @@ def get_polygon_from_user(image, suppress_instructions=False):
         def keyPressEvent(self, event: QKeyEvent):
             key = event.key()
             if key == Qt.Key_C:
-                if len(self.polygon_points) > 2:
-                    self.polygon_closed = True
-                    self.update()
-                    QTimer.singleShot(300, self.close)
-                else:
-                    print("Need at least 3 points to form a polygon.")
+                self.finish_polygon()
             elif key == Qt.Key_R:
                 self.polygon_points = []
                 self.polygon_closed = False
@@ -133,7 +158,7 @@ def get_polygon_from_user(image, suppress_instructions=False):
                 self.polygon_points = []
                 self.polygon_closed = False
                 self.close()
-                exit()
+                sys.exit(0)
 
     app = QApplication.instance()
     if app is None:
@@ -144,6 +169,10 @@ def get_polygon_from_user(image, suppress_instructions=False):
     drawer.show()
     app.exec_()
 
+    if not drawer.accepted:
+        # Window was closed (X'd out) rather than advanced with OK
+        raise WorkflowCancelled("Area-of-interest selection was cancelled.")
+
     if drawer.polygon_closed and len(drawer.polygon_points) > 2:
         scaled_points = []
         for pt in drawer.polygon_points:
@@ -152,4 +181,6 @@ def get_polygon_from_user(image, suppress_instructions=False):
             scaled_points.append([x, y])
         return scaled_points
     else:
-        raise ValueError("At least 3 points are required to form a region of interest.")
+        # OK clicked without drawing a polygon: use the whole image as the ROI
+        h, w = drawer.orig_height, drawer.orig_width
+        return [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
