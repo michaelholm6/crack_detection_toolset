@@ -18,6 +18,9 @@ class InputDialog(QtWidgets.QDialog):
 
         self.suppress_checkbox = QtWidgets.QCheckBox()
 
+        self.detect_pores_checkbox = QtWidgets.QCheckBox()
+        self.detect_pores_checkbox.setChecked(True)
+
         self.output_path_edit = QtWidgets.QLineEdit()
         self.browse_output_button = QtWidgets.QPushButton("Browse Output Folder...")
         
@@ -111,6 +114,30 @@ class InputDialog(QtWidgets.QDialog):
 
         suppress_layout.addStretch()
 
+        # Create checkbox + question mark for toggling pore detection
+        detect_pores_container = QtWidgets.QWidget()
+        detect_pores_layout = QtWidgets.QHBoxLayout(detect_pores_container)
+        detect_pores_layout.setContentsMargins(0, 0, 0, 0)
+        detect_pores_layout.setSpacing(4)
+        detect_pores_layout.addWidget(self.detect_pores_checkbox)
+
+        detect_pores_label = QtWidgets.QLabel("Detect Pores")
+        detect_pores_label.setToolTip(
+            "Uncheck to discard all pore detections entirely. "
+            "Cracks are not affected by this setting."
+        )
+        detect_pores_layout.addWidget(detect_pores_label)
+
+        detect_pores_icon = QtWidgets.QLabel()
+        detect_pores_icon.setPixmap(icon_pix.pixmap(14, 14))
+        detect_pores_icon.setToolTip(
+            "Uncheck to discard all pore detections entirely. "
+            "Cracks are not affected by this setting."
+        )
+        detect_pores_layout.addWidget(detect_pores_icon)
+
+        detect_pores_layout.addStretch()
+
         # === Controls Layout ===
         controls_layout = QtWidgets.QVBoxLayout()
         controls_layout.addWidget(image_path_label)
@@ -118,6 +145,8 @@ class InputDialog(QtWidgets.QDialog):
         controls_layout.addWidget(self.browse_image_button)
         controls_layout.addSpacing(10)
         controls_layout.addWidget(suppress_container)   # just one line here now
+        controls_layout.addSpacing(10)
+        controls_layout.addWidget(detect_pores_container)
         controls_layout.addSpacing(10)
         controls_layout.addWidget(output_path_label)
         controls_layout.addWidget(self.output_path_edit)
@@ -281,6 +310,7 @@ class InputDialog(QtWidgets.QDialog):
         return {
             "image_path": self.image_path_edit.text().strip(),
             "suppress_instructions": self.suppress_checkbox.isChecked(),
+            "detect_pores": self.detect_pores_checkbox.isChecked(),
             "output_path": full_output_path
         }
 

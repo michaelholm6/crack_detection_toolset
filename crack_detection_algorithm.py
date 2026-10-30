@@ -4,6 +4,7 @@ from crack_detection_algorithm_steps.detect_cracks import *
 from crack_detection_algorithm_steps.clip_cracks_to_area_of_interest import *
 from crack_detection_algorithm_steps.measure_contour_circularity import *
 from crack_detection_algorithm_steps.get_physical_scale import *
+from crack_detection_algorithm_steps.filter_pore_area import *
 from crack_detection_algorithm_steps.compute_crack_skeleton import *
 from crack_detection_algorithm_steps.display_statistics import *
 from crack_detection_algorithm_steps.save_and_display_results import *
@@ -25,7 +26,19 @@ def main():
         cracks, circularity = run_contour_editor(image, cracks, line_thickness, args["suppress_instructions"])
         crack_circularity = measure_contour_circularity(cracks)
         crack_and_crack_circularity = [(cnt, circ) for cnt, circ in zip(cracks, crack_circularity)]
+
+        if not args["detect_pores"]:
+            crack_and_crack_circularity = [
+                (cnt, circ) for cnt, circ in crack_and_crack_circularity if circ < circularity
+            ]
+
         um_per_pixel = get_scale_from_user(image, line_thickness, args["suppress_instructions"])
+
+        if args["detect_pores"] and any(circ >= circularity for _, circ in crack_and_crack_circularity):
+            crack_and_crack_circularity = filter_pores_by_area(
+                image, crack_and_crack_circularity, um_per_pixel, circularity, line_thickness, args["suppress_instructions"]
+            )
+
         skeleton = compute_skeleton(crack_and_crack_circularity, gray.shape, circularity)
         display_statistics(crack_and_crack_circularity, um_per_pixel, skeleton, area_of_interest, circularity)
         save_and_display_results(image, crack_and_crack_circularity, skeleton, line_thickness, args["output_path"], circularity)
