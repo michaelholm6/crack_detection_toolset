@@ -50,40 +50,6 @@ def compute_edge_probability(blurred, model_path='model.yml.gz', max_dim=3000):
     return edge_detector.detectEdges(blurred_float), scale_factor
 
 
-def _fill_enclosed_holes(mask):
-    """Fill background regions that are fully enclosed by foreground.
-
-    The structured edge detector fires along both sides of a crack (or
-    around a pore's rim) rather than its interior, so a defect wider than the
-    closing kernel below can bridge shows up as two separate parallel edge
-    strands instead of one filled region. Those strands still meet at the
-    defect's ends though, forming a closed loop, so flood-filling from a
-    guaranteed-background corner and taking whatever it couldn't reach as an
-    enclosed hole converts that loop into one solid blob -- regardless of how
-    wide the gap between the strands is.
-    """
-    padded = cv2.copyMakeBorder(mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
-    flood_fill_mask = np.zeros((padded.shape[0] + 2, padded.shape[1] + 2), np.uint8)
-    flooded = padded.copy()
-    cv2.floodFill(flooded, flood_fill_mask, (0, 0), 255)
-    enclosed_holes = cv2.bitwise_not(flooded)
-    filled = cv2.bitwise_or(padded, enclosed_holes)
-    return filled[1:-1, 1:-1]
-
-
-# _fill_enclosed_holes only fills a defect's interior once its edge ring is a
-# fully closed loop -- a confidence-threshold dropout of even a modest run of
-# pixels along that ring (common at sharp corners/branch tips, where the
-# detector's response is least consistent) leaves it open, so the interior
-# leaks into the background and never gets filled. crack_expansion exists to
-# connect separate nearby defect fragments and control overall mask
-# thickness, not to repair a single defect's own broken edge trace, so it's
-# often left too low (its default is 3) to bridge such a break. Enforce this
-# floor on the closing kernel used below so breaks like that are reliably
-# bridged regardless of what the user has crack_expansion set to.
-_MIN_RING_CLOSE_KERNEL = 11
-
-
 def edges_to_mask(edges, crack_expansion, confidence_threshold=0.15,
                   aoi_pts=None, scale_factor=1.0):
     """Threshold + morphologically close an edge probability map into a mask.
@@ -95,11 +61,9 @@ def edges_to_mask(edges, crack_expansion, confidence_threshold=0.15,
     """
     filtered_edges = (edges > confidence_threshold).astype(np.uint8) * 255
 
-    effective_expansion = max(crack_expansion, _MIN_RING_CLOSE_KERNEL)
-    kernel = np.ones((effective_expansion, effective_expansion), np.uint8)
+    kernel = np.ones((crack_expansion, crack_expansion), np.uint8)
     dilated = cv2.dilate(filtered_edges, kernel, iterations=1)
-    filled = _fill_enclosed_holes(dilated)
-    eroded = cv2.erode(filled, kernel, iterations=1)
+    eroded = cv2.erode(dilated, kernel, iterations=1)
 
     if aoi_pts is not None:
         if scale_factor < 1.0:
