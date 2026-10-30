@@ -50,6 +50,86 @@ def compute_edge_probability(blurred, model_path='model.yml.gz', max_dim=3000):
     return edge_detector.detectEdges(blurred_float), scale_factor
 
 
+# Kernel size used only by _repair_double_edges below, independent of the
+# user-facing crack_expansion -- see that function's docstring.
+_REPAIR_KERNEL_SIZE = 11
+# A filled gap wider than this (its largest inscribed-circle diameter, in
+# pixels) is treated as a real open area rather than a double-edge artifact
+# and is left unfilled -- see _repair_double_edges.
+_REPAIR_MAX_GAP_WIDTH = 20
+
+
+def _fill_thin_holes(component, max_width):
+    """Fill background fully enclosed by component's foreground, but only
+    where the enclosed region is narrow (its thickest point, measured by the
+    largest inscribed-circle diameter via distance transform, is <= max_width).
+
+    A real double-edge gap is a thin sliver the width of the gap between two
+    close edge traces. A legitimate open area -- e.g. the intact cell interior
+    enclosed by a loop of connected cracks in a craquelure pattern -- is wide.
+    Both are, topologically, just "background enclosed by foreground", so
+    width is what distinguishes a defect's own gap from a cell that merely
+    happens to be fully bounded by cracks and must not be filled in.
+    """
+    padded = cv2.copyMakeBorder(component, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    flood_fill_mask = np.zeros((padded.shape[0] + 2, padded.shape[1] + 2), np.uint8)
+    flooded = padded.copy()
+    cv2.floodFill(flooded, flood_fill_mask, (0, 0), 255)
+    enclosed = cv2.bitwise_not(flooded)
+
+    num_holes, hole_labels, _, _ = cv2.connectedComponentsWithStats(enclosed, connectivity=8)
+    thin_holes = np.zeros_like(enclosed)
+    for i in range(1, num_holes):
+        hole = (hole_labels == i).astype(np.uint8) * 255
+        dist = cv2.distanceTransform(hole, cv2.DIST_L2, 5)
+        if dist.max() * 2 <= max_width:
+            thin_holes[hole_labels == i] = 255
+
+    filled = cv2.bitwise_or(padded, thin_holes)
+    return filled[1:-1, 1:-1]
+
+
+def _repair_double_edges(mask):
+    """Repair the "double line" artifact: a crack/pore whose two edges are far
+    enough apart that closing with crack_expansion can't bridge them shows up
+    as two parallel contour strands instead of one filled region (most often
+    where a crack is wider, or fainter, along part of its length).
+
+    This re-processes each connected component of the mask on its own
+    isolated canvas, padded and dilated with a kernel independent of (and
+    typically larger than) crack_expansion, then fills any resulting gap that
+    is still thin (see _fill_thin_holes) and eroded back down. Isolating each
+    component first means this repair can only ever close a gap within that
+    one component's own shape -- it can never bridge to a different, separate
+    defect nearby, which is what made an earlier version of this fix merge
+    unrelated nearby cracks into single blobs. The thin-hole-only fill further
+    guards against the case where a component is itself a closed loop of
+    connected cracks (a cell in a craquelure pattern): without the width
+    check, filling its interior would turn the whole enclosed cell into one
+    giant blob instead of leaving the individual crack lines around it intact.
+    """
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    repaired = np.zeros_like(mask)
+    pad = _REPAIR_KERNEL_SIZE
+    kernel = np.ones((_REPAIR_KERNEL_SIZE, _REPAIR_KERNEL_SIZE), np.uint8)
+
+    for label in range(1, num_labels):
+        x, y, w, h, area = stats[label]
+        if area <= 0:
+            continue
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(mask.shape[1], x + w + pad), min(mask.shape[0], y + h + pad)
+
+        component = (labels[y0:y1, x0:x1] == label).astype(np.uint8) * 255
+        dilated = cv2.dilate(component, kernel, iterations=1)
+        filled = _fill_thin_holes(dilated, _REPAIR_MAX_GAP_WIDTH)
+        eroded = cv2.erode(filled, kernel, iterations=1)
+
+        repaired[y0:y1, x0:x1] = cv2.bitwise_or(repaired[y0:y1, x0:x1], eroded)
+
+    return repaired
+
+
 def edges_to_mask(edges, crack_expansion, confidence_threshold=0.15,
                   aoi_pts=None, scale_factor=1.0):
     """Threshold + morphologically close an edge probability map into a mask.
@@ -64,6 +144,7 @@ def edges_to_mask(edges, crack_expansion, confidence_threshold=0.15,
     kernel = np.ones((crack_expansion, crack_expansion), np.uint8)
     dilated = cv2.dilate(filtered_edges, kernel, iterations=1)
     eroded = cv2.erode(dilated, kernel, iterations=1)
+    eroded = _repair_double_edges(eroded)
 
     if aoi_pts is not None:
         if scale_factor < 1.0:
